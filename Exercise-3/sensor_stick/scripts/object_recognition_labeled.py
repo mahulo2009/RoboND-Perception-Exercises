@@ -1,10 +1,28 @@
 #!/usr/bin/env python
 
-# Import modules
+import numpy as np
+import sklearn
+from sklearn.preprocessing import LabelEncoder
+
+import pickle
+
+from sensor_stick.srv import GetNormals
+from sensor_stick.features import compute_color_histograms
+from sensor_stick.features import compute_normal_histograms
+from visualization_msgs.msg import Marker
+
+from sensor_stick.marker_tools import *
+from sensor_stick.msg import DetectedObjectsArray
+from sensor_stick.msg import DetectedObject
 from sensor_stick.pcl_helper import *
+
+def get_normals(cloud):
+    get_normals_prox = rospy.ServiceProxy('/feature_extractor/get_normals', GetNormals)
+    return get_normals_prox(cloud).cluster
 
 # Callback function for your Point Cloud Subscriber
 def pcl_callback(pcl_msg):
+
     ## Convert ROS msg to PCL data
     pcl_data = ros_to_pcl(pcl_msg)
 
@@ -74,7 +92,42 @@ def pcl_callback(pcl_msg):
     pcl_objects_pub.publish(ros_objects_msg)
     pcl_table_pub.publish(ros_table_msg)
 
+    detected_objects = []
+    detected_objects_labels = []
+    # Classify the clusters! (loop through each detected cluster one at a time)
+    for index, pts_list in enumerate(cluster_indices):
+        # Grab the points for the cluster
+        pcl_data_single_object_clustered = pcl_data_objects.extract(pts_list)
+        ros_data_single_object_clustered = pcl_to_ros(pcl_data_single_object_clustered)
+        # Compute the associated feature vector
+        chists = compute_color_histograms(ros_data_single_object_clustered,using_hsv=True)
+        normals = get_normals(ros_data_single_object_clustered)
+        nhists = compute_normal_histograms(normals)
+        feature = np.concatenate((chists, nhists))
+        # Make the prediction
+        prediction = clf.predict(scaler.transform(feature.reshape(1,-1)))
+        label = encoder.inverse_transform(prediction)[0]
+        detected_objects_labels.append(label)
+        # Publish a label into RViz
+        label_pos = list(pcl_data_objects_xyz[pts_list[0]])
+        label_pos[2] += .4
+        object_markers_pub.publish(make_label(label,label_pos, index))
+        # Add the detected object to the list of detected objects.
+        do = DetectedObject()
+        do.label = label
+        do.cloud = ros_data_single_object_clustered
+        detected_objects.append(do)
+
+    # Publish the list of detected objects
+    rospy.loginfo('Detected {} objects: {}'.format(len(detected_objects_labels), detected_objects_labels))
+    detected_objects_pub.publish(detected_objects)
+
 if __name__ == '__main__':
+    model = pickle.load(open('model.sav', 'rb'))
+    clf = model['classifier']
+    encoder = LabelEncoder()
+    encoder.classes_ = model['classes']
+    scaler = model['scaler']
     # ROS node initialization
     rospy.init_node('clustering',anonymous=True)
     # Create Subscribers
@@ -82,6 +135,8 @@ if __name__ == '__main__':
     # Create Publishers
     pcl_objects_pub = rospy.Publisher("/pcl_objects",pc2.PointCloud2,queue_size=1)
     pcl_table_pub = rospy.Publisher("/pcl_table",pc2.PointCloud2,queue_size=1)
+    object_markers_pub = rospy.Publisher("/object_markers",Marker,queue_size=1)
+    detected_objects_pub = rospy.Publisher("/detected_objects",DetectedObjectsArray,queue_size=1)
     # Initialize color_list
     get_color_list.color_list = []
     # Spin while node is not shutdown
