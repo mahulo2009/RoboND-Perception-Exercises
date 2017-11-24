@@ -23,7 +23,7 @@ def get_normals(cloud):
 if __name__ == '__main__':
     rospy.init_node('capture_node')
 
-    models = [\
+    models_old = [\
        'beer',
        'bowl',
        'create',
@@ -31,6 +31,16 @@ if __name__ == '__main__':
        'hammer',
        'plastic_cup',
        'soda_can']
+
+    models = [\
+       'biscuits',
+       'soap',
+       'soap2',
+       'book',
+       'glue',
+       'sticky_notes',
+       'snacks',
+       'eraser']
 
     # Disable gravity and delete the ground plane
     initial_setup()
